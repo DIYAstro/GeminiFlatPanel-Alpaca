@@ -151,7 +151,8 @@ successful tick.
    protocol this proxy itself answers for CoverCalibrator/Switch discovery) and lists
    every ObservingConditions device found, so the URL/device number usually don't need
    typing by hand at all.
-2. [Open-Meteo](https://open-meteo.com) (a free, keyless weather API), used only if
+2. [Open-Meteo](https://open-meteo.com) (a free, keyless weather API that needs an
+   internet connection at your observing site), used only if
    ObservingConditions is unconfigured or its fetch fails, and only if
    `enableOpenMeteo` is `true`.
 
