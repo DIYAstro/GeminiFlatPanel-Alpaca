@@ -111,6 +111,11 @@ immediately — it's held open for `idleReleaseTimeoutSeconds` (default 60 secon
 in case of a quick reconnect (e.g. an equipment profile switch in the client software),
 then released if nothing reconnected in that window.
 
+A classic ASCOM driver (see [ASCOM driver registration](driver_installation.md)) also
+needs a longer connection timeout for this mode than ASCOM's 2-second default; the
+helper script sets it for you, see
+[Connect-on-Demand and the connection timeout](driver_installation.md#connect-on-demand-and-the-connection-timeout).
+
 ## Automatic Dew Control
 
 A dew heater can be driven automatically from a heating curve, instead of only ever

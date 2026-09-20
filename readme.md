@@ -31,6 +31,7 @@ A third-party ASCOM Alpaca driver for Gemini Astro's flat-field calibrator panel
 **Getting Started**
 - 🚀 [Installation (Windows & Linux)](docs/installation.md)
 - 🐧 [Linux / Raspberry Pi Install — full walkthrough](docs/installation_linux.md)
+- 🔌 [ASCOM Driver Registration (classic ASCOM clients)](docs/driver_installation.md)
 
 **Using the Proxy**
 - 📄 [`proxy_config.json` Reference](docs/configuration.md)

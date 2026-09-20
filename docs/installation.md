@@ -5,7 +5,7 @@
 ## Windows
 1. Download the latest `GeminiFlatPanelProxy-Setup-vX.Y.Z.exe` from the releases.
 2. Run the installer. It terminates running instances, installs the files, and registers the app to run at startup if selected.
-3. Search for "Create Gemini Flat Panel Ascom Driver" in the Start Menu (or run `Helper/Create-Driver.bat` from the installation directory as Administrator) to register the driver in the Windows ASCOM registry.
+3. Register the driver with ASCOM: search for "Create Gemini Flat Panel Ascom Driver" in the Start Menu (or run `Helper/Create-Driver.bat` from the installation directory as Administrator). You can skip this if your software already lists the panel through Alpaca discovery (N.I.N.A. usually does). See [ASCOM driver registration](driver_installation.md) for when it's needed, what the script asks, and the manual alternative.
 4. Select "Gemini Flat Panel" in the astronomy software.
 
 ## Linux
