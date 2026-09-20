@@ -1,0 +1,35 @@
+name: Release Everything
+
+# Runs both platform builds in order: Windows -> Linux (sequential, not parallel, so a
+# failure stops the chain before the second one builds against a potentially bad state).
+# For a normal stable release. For a beta/pre-release you can also just run
+# release-windows.yml / release-linux.yml individually with the same release_tag.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to build everything against (blank = current 'latest' release)"
+        required: false
+        type: string
+
+# A reusable workflow can never be granted more permissions than its caller has,
+# regardless of what the reusable workflow's own `permissions:` block asks for -
+# without this, GitHub rejects the whole run with "The workflow is requesting
+# 'contents: write', but is only allowed 'contents: read'" as soon as it tries to call
+# release-windows.yml/release-linux.yml.
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    uses: ./.github/workflows/release-windows.yml
+    with:
+      release_tag: ${{ inputs.release_tag }}
+    secrets: inherit
+
+  linux:
+    needs: windows
+    uses: ./.github/workflows/release-linux.yml
+    with:
+      release_tag: ${{ inputs.release_tag }}
+    secrets: inherit

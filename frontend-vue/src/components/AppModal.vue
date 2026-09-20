@@ -1,0 +1,115 @@
+<script setup>
+import { watch } from 'vue'
+import { useModalStore } from '../stores/modal'
+import { storeToRefs } from 'pinia'
+import { lockBodyScroll, unlockBodyScroll } from '../utils/modalScrollLock'
+
+const modalStore = useModalStore()
+const { isVisible, modalConfig } = storeToRefs(modalStore)
+
+// No click-outside-to-close here (or on any of Dashboard.vue's modals) --
+// previously present, but it also fired from a plain text-selection drag that
+// happened to end (mouseup) over the overlay rather than the modal content,
+// closing the dialog when the user only meant to select text. Every modal already
+// has an explicit dismiss path (this one always has at least one button, enforced
+// by the modal store's own show()/success()/error()/info()/confirm() helpers).
+watch(isVisible, (visible) => {
+    if (visible) {
+        lockBodyScroll()
+    } else {
+        unlockBodyScroll()
+    }
+})
+
+function handleButtonClick(button) {
+    if (button.action) {
+        button.action()
+    } else {
+        modalStore.close()
+    }
+}
+</script>
+
+<template>
+    <Teleport to="body">
+        <div v-if="isVisible" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <span v-if="modalConfig.icon" class="modal-icon">{{ modalConfig.icon }}</span>
+                    <h3>{{ modalConfig.title }}</h3>
+                </div>
+                <p class="modal-message">{{ modalConfig.message }}</p>
+                <div class="modal-actions">
+                    <button 
+                        v-for="(button, index) in modalConfig.buttons" 
+                        :key="index"
+                        @click="handleButtonClick(button)"
+                        :class="[
+                            button.primary ? (button.danger ? 'btn-danger' : 'btn-primary') : 'btn-secondary'
+                        ]"
+                    >
+                        {{ button.text }}
+                    </button>
+                </div>
+            </div>
+        </div>
+    </Teleport>
+</template>
+
+<style scoped>
+.modal-overlay {
+    z-index: 9999;
+}
+
+.modal-content {
+    min-width: 350px;
+    max-width: 500px;
+    text-align: center;
+    animation: modalSlideIn 0.2s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.modal-header h3 {
+    margin: 0;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.modal-icon {
+    font-size: 1.5rem;
+}
+
+.modal-message {
+    color: var(--text-secondary);
+    margin-bottom: 1.5rem;
+    line-height: 1.5;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+}
+
+.modal-actions button {
+    min-width: 100px;
+}
+</style>

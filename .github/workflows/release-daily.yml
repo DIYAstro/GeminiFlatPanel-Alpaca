@@ -1,0 +1,189 @@
+name: Daily Prerelease Build
+
+# Runs every night, but only actually builds/publishes something if anything changed
+# since the last dev-build - otherwise it's a no-op (no wasted CI minutes, no empty
+# releases). When it does build, it publishes to a single rolling "dev-build"
+# tag/release (always the same tag, force-moved each time) rather than a fresh dated
+# tag - no separate pruning needed, and testers get one stable link that's always
+# "whatever's newest". The version carries a
+# `-dev-build.<short-sha-of-last-touching-commit>` suffix so a running instance can
+# still be identified even though the tag name alone doesn't change between builds.
+#
+# Deliberately mirrors the manual beta-release process documented in
+# build_scripts/readme.md ("Cutting a release / beta"), just automated: bump
+# release_version.json, create a *pre-release* tag, then run release-windows.yml ->
+# release-linux.yml against it.
+#
+# This project has no separate firmware component, so there's only one change flag and
+# one version number to track (a project that also ships firmware would typically track
+# that independently, since a firmware build is often by far the slowest part of the
+# pipeline and worth skipping on its own).
+on:
+  schedule:
+    - cron: "17 2 * * *" # daily at 02:17 UTC - off the hour, and off cleanup-old-runs.yml's
+                          # Sunday 03:00 UTC slot, just to avoid piling multiple scheduled runs
+                          # into the same minute.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if nothing changed since the last dev-build"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: true
+
+# Same union-of-needs reasoning as release-all.yml: a reusable workflow can never be
+# granted more permissions than its caller has. Only contents: write is needed here
+# (for the tag push + gh release create/edit/upload).
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+      prev_sha: ${{ steps.prev.outputs.sha }}
+    steps:
+      # ref explicit: a schedule/workflow_dispatch trigger otherwise checks out the
+      # repo's default branch, not necessarily where ongoing development happens.
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Resolves to the tag commit's *parent*, not the tag commit itself: the tag
+      # always points at a synthetic version-bump commit (release_version.json patched
+      # to that day's version), which never matches HEAD's clean value in that same
+      # file even when nothing real changed - diffing against it would make the change
+      # check below fire every single day. The parent is the actual last real commit
+      # that bump was built from.
+      - name: Resolve the previous dev-build's commit
+        id: prev
+        run: |
+          git fetch origin --tags --force
+          if git rev-parse -q --verify refs/tags/dev-build^{commit} > /dev/null; then
+            SHA=$(git rev-parse refs/tags/dev-build^{commit}^1)
+          else
+            SHA=""
+          fi
+          echo "Previous dev-build commit: ${SHA:-<none, first run>}"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check for changes since the last dev-build
+        id: diff
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "force=true, building regardless of changes"
+            CHANGED=true
+          elif [ -z "${{ steps.prev.outputs.sha }}" ]; then
+            echo "No previous dev-build found (first run) - building"
+            CHANGED=true
+          else
+            CHANGED=false
+            git diff --quiet ${{ steps.prev.outputs.sha }}..HEAD || CHANGED=true
+          fi
+
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          if [ "$CHANGED" = "true" ]; then
+            echo "Building (changed since last dev-build)"
+          else
+            echo "No changes since the last dev-build - skipping"
+          fi
+
+  publish:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      # Hash of the last commit that actually touched the repo (not today's date/HEAD)
+      # - keeps the version tied to real content rather than the calendar.
+      - name: Compute this dev-build's version
+        id: ver
+        run: |
+          BASE=$(jq -r '.proxyVersion' release_version.json)
+          HASH=$(git log -1 --format=%h)
+          echo "version=${BASE}-dev-build.${HASH}" >> "$GITHUB_OUTPUT"
+
+      # Only ever committed locally in this runner's checkout, never part of any
+      # permanent branch history - the rolling `dev-build` tag (moved below) is the
+      # only thing that will ever reference this commit. Once the next run
+      # force-moves the tag past it, it becomes unreachable and Git's normal garbage
+      # collection cleans it up on its own - the usual pattern for a rolling
+      # prerelease tag.
+      - name: Bump release_version.json
+        run: |
+          jq -n --arg pv "${{ steps.ver.outputs.version }}" '{proxyVersion: $pv}' > release_version.json
+
+      - name: Commit the version bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add release_version.json
+          git commit -m "Dev build ${{ steps.ver.outputs.version }}"
+
+      # Against the last *stable* tag, not the last dev-build - since dev-builds only
+      # fire when something actually changed, "since the last dev-build" is often just
+      # one commit and tells a tester nothing about what they're actually getting
+      # relative to the release everyone else is running. --exclude=dev-build keeps
+      # the rolling dev-build tag itself from matching.
+      - name: Generate release notes from what changed since the last stable release
+        run: |
+          LAST_STABLE=$(git describe --tags --abbrev=0 --exclude=dev-build HEAD~1 2>/dev/null || true)
+          if [ -n "$LAST_STABLE" ]; then
+            git log "$LAST_STABLE"..HEAD~1 --oneline > release-notes.txt
+          else
+            echo "First dev-build." > release-notes.txt
+          fi
+          cat release-notes.txt
+
+      # Moves the tag only - never deletes+recreates the release. A release's "target
+      # commit" is whatever its tag currently resolves to, so force-moving the tag is
+      # enough; deleting it first would also wipe any assets already there from a
+      # previous run.
+      - name: Move the rolling 'dev-build' tag and update the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f dev-build
+          git push origin dev-build --force
+          if gh release view dev-build >/dev/null 2>&1; then
+            # Toggling draft -> published resets GitHub's `published_at` timestamp to
+            # now - a plain `gh release edit` (title/notes only) never touches it, so
+            # the "released X ago" badge on the release page would otherwise keep
+            # showing this release's original creation date forever, even though the
+            # content underneath gets rebuilt whenever dev changes.
+            gh release edit dev-build --draft
+            gh release edit dev-build \
+              --draft=false \
+              --title "Dev build $(date -u +%Y-%m-%d)" \
+              --notes-file release-notes.txt
+          else
+            gh release create dev-build \
+              --prerelease \
+              --title "Dev build $(date -u +%Y-%m-%d)" \
+              --notes-file release-notes.txt
+          fi
+
+  windows:
+    needs: publish
+    uses: ./.github/workflows/release-windows.yml
+    with:
+      release_tag: dev-build
+    secrets: inherit
+
+  linux:
+    needs: windows
+    uses: ./.github/workflows/release-linux.yml
+    with:
+      release_tag: dev-build
+    secrets: inherit

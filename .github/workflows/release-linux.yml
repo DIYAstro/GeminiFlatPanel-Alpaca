@@ -1,0 +1,114 @@
+name: Build & Publish Linux Release Assets
+
+# Manual only, matching release-windows.yml. Builds geminiflatpanel-linux-amd64/-arm64
+# natively (no cross-compile toolchain needed - see build_linux.sh, which this reuses
+# as-is) and attaches them, plus install_linux.sh, to an ALREADY-EXISTING release - this
+# workflow never creates one itself.
+#
+# No libusb/gcc install step is needed here - this project has no cgo dependency on
+# Linux at all (see build_linux.sh's own header comment for why).
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to attach Linux assets to (blank = current 'latest' release)"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag to attach Linux assets to (blank = current 'latest' release)"
+        required: false
+        type: string
+
+permissions:
+  contents: write # needed for `gh release upload`
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      # ref explicit - same reasoning as release-windows.yml: without it, a reusable-
+      # workflow call with a release_tag pointing elsewhere would silently build the
+      # wrong source.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "22"
+
+      # Reads release_version.json, patches versioninfo.json, builds the frontend, and
+      # compiles build/geminiflatpanel-linux-<arch> - see build_scripts/readme.md.
+      - name: Build
+        run: bash build_scripts/build_linux.sh
+
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: binary-${{ matrix.arch }}
+          path: build/geminiflatpanel-linux-${{ matrix.arch }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Same ref: reasoning as the build job above - needed so the install_linux.sh
+      # sanity-check and upload below operate on the tagged commit, not whatever
+      # triggered this run.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: release-assets
+
+      # Guards against a Windows working-tree copy with CRLF line endings ending up on a
+      # release, where it would crash immediately when piped into bash on the target
+      # Linux system. .gitattributes (*.sh text eol=lf) should already prevent this in
+      # the working tree this checkout produces - this is a cheap, explicit
+      # belt-and-suspenders check right before it goes out the door.
+      - name: Sanity-check install_linux.sh has no CRLF line endings
+        run: |
+          if grep -qU $'\r' build_scripts/install_linux.sh; then
+            echo "::error::install_linux.sh has CRLF line endings - refusing to upload"
+            exit 1
+          fi
+
+      - name: Resolve target release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --json tagName -q .tagName)
+          fi
+          echo "Target release: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # --clobber intentionally overwrites any existing same-named assets on the release.
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
+            release-assets/geminiflatpanel-linux-amd64 \
+            release-assets/geminiflatpanel-linux-arm64 \
+            build_scripts/install_linux.sh \
+            --clobber

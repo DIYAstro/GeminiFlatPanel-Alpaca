@@ -1,0 +1,89 @@
+name: Build & Publish Windows Installer
+
+# Manual only. Builds the installer and uploads it to an ALREADY-EXISTING release -
+# this workflow never creates one itself. Cut a release first (tag + notes, see
+# build_scripts/readme.md), then dispatch this from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to build against / attach the installer to (blank = current 'latest' release)"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      release_tag:
+        description: "Release tag to build against / attach the installer to (blank = current 'latest' release)"
+        required: false
+        type: string
+
+permissions:
+  contents: write # needed for `gh release upload`
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      # ref explicit: without it, checkout defaults to whatever commit triggered *this*
+      # run, which is wrong when called as a reusable workflow with a release_tag
+      # pointing elsewhere - it would silently build the wrong source. Empty release_tag
+      # behaves exactly like omitting ref: (falls back to the trigger commit), so this is
+      # a no-op for the normal "blank = latest" manual-dispatch case.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.release_tag }}
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: "22"
+
+      # windows-latest doesn't ship Inno Setup by default - build_installer.bat's
+      # hardcoded ISCC path (C:\Program Files (x86)\Inno Setup 6\ISCC.exe) is exactly
+      # where Chocolatey's innosetup package installs it.
+      - name: Install Inno Setup
+        run: choco install -y innosetup
+
+      - name: Resolve target release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ inputs.release_tag }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) {
+            $tag = (gh release view --json tagName -q .tagName)
+          }
+          Write-Host "Target release: $tag"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      # Reads release_version.json, patches versioninfo.json, builds the frontend,
+      # compiles geminiflatpanel.exe, then compiles the installer with Inno Setup - see
+      # build_scripts/readme.md for the full step breakdown.
+      - name: Build installer
+        run: |
+          & "build_scripts\build_installer.bat"
+          if ($LASTEXITCODE -ne 0) { throw "build_installer.bat failed with exit code $LASTEXITCODE" }
+
+      - name: Upload installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-ChildItem "build\GeminiFlatPanelProxy-Setup-*.exe" | Select-Object -First 1
+
+          # The installer's filename embeds its own version (installer.iss's
+          # OutputBaseFilename), so --clobber below can never match a differently-named
+          # installer already on the release from a previous version - it just adds a
+          # new asset, leaving every previous installer to pile up on the release
+          # forever. Delete any other installer asset already on this release first.
+          $staleInstallers = gh release view "${{ steps.tag.outputs.tag }}" --json assets -q '.assets[].name' |
+            Where-Object { $_ -like "GeminiFlatPanelProxy-Setup-*.exe" -and $_ -ne $installer.Name }
+          foreach ($stale in $staleInstallers) {
+            Write-Host "Removing stale installer asset: $stale"
+            gh release delete-asset "${{ steps.tag.outputs.tag }}" $stale --yes
+          }
+
+          gh release upload "${{ steps.tag.outputs.tag }}" $installer.FullName --clobber

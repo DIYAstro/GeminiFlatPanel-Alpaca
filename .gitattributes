@@ -1,0 +1,16 @@
+# Force LF line endings for shell scripts regardless of the checking-out platform's
+# core.autocrlf setting. Without this, a Windows checkout (core.autocrlf=true is a very
+# common default there) silently converts these to CRLF on disk - harmless until someone
+# uploads that working-tree copy somewhere a shell actually has to run it (e.g. a GitHub
+# release asset, fetched and piped straight into `sudo bash` by install_linux.sh's own
+# documented one-liner), where CRLF breaks the shebang and produces
+# `$'\r': command not found` / `invalid option` errors. Same rationale (and file) as the
+# sibling SV241-Unbound project's .gitattributes, added there after hitting exactly this
+# bug with its own install_linux.sh.
+*.sh text eol=lf
+# GitHub Actions workflow YAML - same rationale, kept consistent for anything with
+# embedded shell (`run:` blocks) even though a normal `actions/checkout` on a Linux
+# runner is unaffected by this machine's autocrlf setting (only a manual out-of-band
+# copy would ever hit this).
+*.yml text eol=lf
+*.yaml text eol=lf

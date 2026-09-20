@@ -1,0 +1,22 @@
+# Binaries and build directories
+bin/
+build/
+geminiflatpanel.exe
+resource.syso
+temp_installer.iss
+examples/
+
+# IDE settings and system files
+.idea/
+.vscode/
+.claude/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
