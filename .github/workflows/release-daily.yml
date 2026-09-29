@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       changed: ${{ steps.diff.outputs.changed }}
       prev_sha: ${{ steps.prev.outputs.sha }}
@@ -98,7 +98,7 @@ jobs:
   publish:
     needs: check
     if: needs.check.outputs.changed == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
         with:
