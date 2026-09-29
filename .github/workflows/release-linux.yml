@@ -7,6 +7,11 @@ name: Build & Publish Linux Release Assets
 #
 # No libusb/gcc install step is needed here - this project has no cgo dependency on
 # Linux at all (see build_linux.sh's own header comment for why).
+#
+# Each matrix leg (amd64/arm64) builds and uploads its own binary directly - no separate
+# publish job or upload-artifact/download-artifact hand-off, same as release-windows.yml.
+# install_linux.sh is arch-independent, so only the amd64 leg uploads it, to avoid two
+# parallel jobs racing `gh release upload --clobber` against the same asset name.
 on:
   workflow_dispatch:
     inputs:
@@ -56,45 +61,8 @@ jobs:
       - name: Build
         run: bash build_scripts/build_linux.sh
 
-      # retention-days: 1 - this is purely a hand-off to the publish job below within the
-      # same run, which immediately re-uploads it to the GitHub Release. It's never needed
-      # again after that, so there's no reason to eat into the account's Actions storage
-      # quota at GitHub's 90-day artifact default.
-      - uses: actions/upload-artifact@v7.0.1
-        with:
-          name: binary-${{ matrix.arch }}
-          path: build/geminiflatpanel-linux-${{ matrix.arch }}
-          retention-days: 1
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      # Same ref: reasoning as the build job above - needed so the install_linux.sh
-      # sanity-check and upload below operate on the tagged commit, not whatever
-      # triggered this run.
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ inputs.release_tag }}
-
-      - uses: actions/download-artifact@v8.0.1
-        with:
-          pattern: binary-*
-          merge-multiple: true
-          path: release-assets
-
-      # Guards against a Windows working-tree copy with CRLF line endings ending up on a
-      # release, where it would crash immediately when piped into bash on the target
-      # Linux system. .gitattributes (*.sh text eol=lf) should already prevent this in
-      # the working tree this checkout produces - this is a cheap, explicit
-      # belt-and-suspenders check right before it goes out the door.
-      - name: Sanity-check install_linux.sh has no CRLF line endings
-        run: |
-          if grep -qU $'\r' build_scripts/install_linux.sh; then
-            echo "::error::install_linux.sh has CRLF line endings - refusing to upload"
-            exit 1
-          fi
-
+      # Each matrix leg resolves the tag itself (this step is cheap and per-arch, no need for a
+      # separate job just to share one `gh release view` call).
       - name: Resolve target release tag
         id: tag
         env:
@@ -107,13 +75,36 @@ jobs:
           echo "Target release: $TAG"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      # --clobber intentionally overwrites any existing same-named assets on the release.
-      - name: Upload assets to release
+      # Guards against a Windows working-tree copy with CRLF line endings ending up on a
+      # release, where it would crash immediately when piped into bash on the target
+      # Linux system. .gitattributes (*.sh text eol=lf) should already prevent this in
+      # the working tree this checkout produces - this is a cheap, explicit
+      # belt-and-suspenders check right before it goes out the door. Only the amd64 leg
+      # uploads install_linux.sh (see below), so only it needs to check it.
+      - name: Sanity-check install_linux.sh has no CRLF line endings
+        if: matrix.arch == 'amd64'
+        run: |
+          if grep -qU $'\r' build_scripts/install_linux.sh; then
+            echo "::error::install_linux.sh has CRLF line endings - refusing to upload"
+            exit 1
+          fi
+
+      # --clobber intentionally overwrites any existing same-named asset on the release.
+      - name: Upload binary to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ steps.tag.outputs.tag }}" \
-            release-assets/geminiflatpanel-linux-amd64 \
-            release-assets/geminiflatpanel-linux-arm64 \
+            build/geminiflatpanel-linux-${{ matrix.arch }} \
+            --clobber
+
+      # install_linux.sh is arch-independent - uploaded once by the amd64 leg only, so the two
+      # matrix legs never race `gh release upload --clobber` against the same asset name.
+      - name: Upload install_linux.sh to release
+        if: matrix.arch == 'amd64'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ steps.tag.outputs.tag }}" \
             build_scripts/install_linux.sh \
             --clobber
